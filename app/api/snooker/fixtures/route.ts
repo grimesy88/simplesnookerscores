@@ -1,13 +1,10 @@
 import { NextResponse } from "next/server"
+import { unstable_cache } from "next/cache"
 
 const API_KEY = "vV8cNpUMeXc7LCCCHKytYWCR5mO6MzPbG5C8jiyi"
 const BASE_URL = "https://api.sportdb.dev/api/flashscore"
 
-const SNOOKER_REGIONS = ["world:8", "germany:81", "uk:82"] // Example regions, should be dynamically fetched
-
-let cachedFixturesData: unknown[] | null = null
-let fixturesCacheTimestamp = 0
-const FIXTURES_CACHE_DURATION_MS = 60 * 60 * 1000 // 1 hour
+const FIXTURES_CACHE_DURATION_SECONDS = 60 * 60 // 1 hour in seconds
 
 async function apiFetch(endpoint: string) {
   const response = await fetch(`${BASE_URL}${endpoint}`, {
@@ -15,19 +12,17 @@ async function apiFetch(endpoint: string) {
       "x-api-key": API_KEY,
       "Content-Type": "application/json",
     },
+    cache: "no-store",
   })
   if (!response.ok) return null
   return response.json()
 }
 
-// All snooker regions/categories to query
-// First fetch the base /snooker endpoint to get all available regions dynamically
 async function fetchAllRegions(): Promise<string[]> {
   try {
     const regions = await apiFetch("/snooker")
     if (!Array.isArray(regions)) return []
     
-    // Extract region paths like "world:8", "germany:81", etc.
     return regions
       .filter((r: { slug?: string; id?: string }) => r.slug && r.id)
       .map((r: { slug: string; id: string }) => `${r.slug}:${r.id}`)
@@ -83,63 +78,56 @@ async function fetchFixturesForRegion(region: string): Promise<unknown[]> {
   }
 }
 
-async function fetchAllFixtures(): Promise<unknown[]> {
+async function fetchAllFixturesUncached(): Promise<{ fixtures: unknown[]; timestamp: number }> {
   try {
-    // First, dynamically fetch all available regions
     const regions = await fetchAllRegions()
-    console.log(`[v0] Found ${regions.length} regions:`, regions)
+    console.log(`[v0] Fetching fixtures from ${regions.length} regions (cache miss)`)
     
     if (regions.length === 0) {
-      console.log("[v0] No regions found, using fallback")
-      return []
+      return { fixtures: [], timestamp: Date.now() }
     }
 
-    // Fetch fixtures from all regions in parallel
     const regionPromises = regions.map((region) => fetchFixturesForRegion(region))
     const regionResults = await Promise.all(regionPromises)
 
-    // Flatten all fixtures into one array
     const allFixtures = regionResults.flat()
 
-    // Remove duplicates based on eventId
     const uniqueFixtures = Array.from(
       new Map(allFixtures.map((f: unknown) => [(f as { eventId?: string }).eventId, f])).values()
     )
 
-    console.log(`[v0] Total unique fixtures collected from ${regions.length} regions:`, uniqueFixtures.length)
-    return uniqueFixtures
+    console.log(`[v0] Total unique fixtures collected: ${uniqueFixtures.length}`)
+    return { fixtures: uniqueFixtures, timestamp: Date.now() }
   } catch (error) {
     console.log("[v0] Error in fetchAllFixtures:", error)
-    return []
+    return { fixtures: [], timestamp: Date.now() }
   }
 }
 
+// Use Next.js unstable_cache for server-side caching that persists across requests
+const getCachedFixtures = unstable_cache(
+  fetchAllFixturesUncached,
+  ["snooker-fixtures"],
+  {
+    revalidate: FIXTURES_CACHE_DURATION_SECONDS,
+    tags: ["snooker-fixtures"],
+  }
+)
+
 export async function GET() {
-  const now = Date.now()
-  const isCached = cachedFixturesData && now - fixturesCacheTimestamp < FIXTURES_CACHE_DURATION_MS
-
   try {
-    let fixturesData = cachedFixturesData || []
-
-    if (!isCached) {
-      fixturesData = await fetchAllFixtures()
-      cachedFixturesData = fixturesData
-      fixturesCacheTimestamp = now
-    }
+    const result = await getCachedFixtures()
+    
+    const cacheAge = Math.round((Date.now() - result.timestamp) / 1000)
+    const nextRefresh = Math.max(0, FIXTURES_CACHE_DURATION_SECONDS - cacheAge)
 
     return NextResponse.json({
-      data: fixturesData,
-      cached: isCached,
-      nextRefresh: isCached ? Math.round((FIXTURES_CACHE_DURATION_MS - (now - fixturesCacheTimestamp)) / 1000) : 3600,
+      data: result.fixtures,
+      cached: cacheAge > 5, // If fetched more than 5 seconds ago, it's from cache
+      cacheAge,
+      nextRefresh,
     })
   } catch (error) {
-    if (cachedFixturesData) {
-      return NextResponse.json({
-        data: cachedFixturesData,
-        stale: true,
-        cacheAge: Math.round((now - fixturesCacheTimestamp) / 1000),
-      })
-    }
     return NextResponse.json({ error: "Failed to fetch fixtures", details: String(error) }, { status: 500 })
   }
 }
