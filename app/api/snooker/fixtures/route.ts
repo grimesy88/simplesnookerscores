@@ -3,6 +3,8 @@ import { NextResponse } from "next/server"
 const API_KEY = "vV8cNpUMeXc7LCCCHKytYWCR5mO6MzPbG5C8jiyi"
 const BASE_URL = "https://api.sportdb.dev/api/flashscore"
 
+const SNOOKER_REGIONS = ["world:8", "germany:81", "uk:82"] // Example regions, should be dynamically fetched
+
 let cachedFixturesData: unknown[] | null = null
 let fixturesCacheTimestamp = 0
 const FIXTURES_CACHE_DURATION_MS = 60 * 60 * 1000 // 1 hour
@@ -18,18 +20,30 @@ async function apiFetch(endpoint: string) {
   return response.json()
 }
 
-async function fetchAllFixtures(): Promise<unknown[]> {
+// All snooker regions/categories to query
+// First fetch the base /snooker endpoint to get all available regions dynamically
+async function fetchAllRegions(): Promise<string[]> {
   try {
-    // Step 1: Get all tournaments from world:8
-    const tournaments = await apiFetch("/snooker/world:8")
+    const regions = await apiFetch("/snooker")
+    if (!Array.isArray(regions)) return []
+    
+    // Extract region paths like "world:8", "germany:81", etc.
+    return regions
+      .filter((r: { slug?: string; id?: string }) => r.slug && r.id)
+      .map((r: { slug: string; id: string }) => `${r.slug}:${r.id}`)
+  } catch {
+    return []
+  }
+}
+
+async function fetchFixturesForRegion(region: string): Promise<unknown[]> {
+  try {
+    const tournaments = await apiFetch(`/snooker/${region}`)
     if (!Array.isArray(tournaments) || tournaments.length === 0) {
-      console.log("[v0] No tournaments found in world:8")
       return []
     }
-    console.log("[v0] Found tournaments:", tournaments.length)
 
-    // Step 2: For each tournament, get details and find 2026 season
-    const allFixtures: unknown[] = []
+    const regionFixtures: unknown[] = []
 
     for (const tournament of tournaments) {
       const tournamentId = tournament.id
@@ -39,45 +53,61 @@ async function fetchAllFixtures(): Promise<unknown[]> {
       const tournamentPath = `${tournamentSlug}:${tournamentId}`
 
       try {
-        // Get tournament details with seasons
-        const tournamentDetails = await apiFetch(`/snooker/world:8/${tournamentPath}`)
+        const tournamentDetails = await apiFetch(`/snooker/${region}/${tournamentPath}`)
         if (!tournamentDetails) continue
 
         const seasons = tournamentDetails.seasons || []
         const season2026 = seasons.find((s: { season?: string; fixtures?: string }) => s.season === "2026")
 
-        if (!season2026) {
-          console.log(`[v0] No 2026 season for ${tournamentSlug}`)
-          continue
-        }
-
-        console.log(`[v0] Found 2026 season for ${tournamentSlug}`)
+        if (!season2026) continue
 
         const fixturesUrl = season2026.fixtures
-        if (!fixturesUrl) {
-          console.log(`[v0] No fixtures URL for ${tournamentSlug}`)
-          continue
-        }
+        if (!fixturesUrl) continue
 
-        // The fixtures URL is a full path like /api/flashscore/snooker/world:8/the-masters:GS36K259/2026/fixtures?page=1
-        // We need to extract just the part after /api/flashscore
         const fixturesPath = fixturesUrl.replace("/api/flashscore", "")
         const fixturesData = await apiFetch(fixturesPath)
 
         if (fixturesData && Array.isArray(fixturesData)) {
-          console.log(`[v0] Found ${fixturesData.length} fixtures for ${tournamentSlug}`)
-          allFixtures.push(...fixturesData)
+          regionFixtures.push(...fixturesData)
         } else if (fixturesData && fixturesData.data && Array.isArray(fixturesData.data)) {
-          console.log(`[v0] Found ${fixturesData.data.length} fixtures for ${tournamentSlug}`)
-          allFixtures.push(...fixturesData.data)
+          regionFixtures.push(...fixturesData.data)
         }
-      } catch (err) {
-        console.log(`[v0] Error fetching tournament ${tournamentSlug}:`, err)
+      } catch {
+        // Skip tournament on error
       }
     }
 
-    console.log("[v0] Total fixtures collected:", allFixtures.length)
-    return allFixtures
+    return regionFixtures
+  } catch {
+    return []
+  }
+}
+
+async function fetchAllFixtures(): Promise<unknown[]> {
+  try {
+    // First, dynamically fetch all available regions
+    const regions = await fetchAllRegions()
+    console.log(`[v0] Found ${regions.length} regions:`, regions)
+    
+    if (regions.length === 0) {
+      console.log("[v0] No regions found, using fallback")
+      return []
+    }
+
+    // Fetch fixtures from all regions in parallel
+    const regionPromises = regions.map((region) => fetchFixturesForRegion(region))
+    const regionResults = await Promise.all(regionPromises)
+
+    // Flatten all fixtures into one array
+    const allFixtures = regionResults.flat()
+
+    // Remove duplicates based on eventId
+    const uniqueFixtures = Array.from(
+      new Map(allFixtures.map((f: unknown) => [(f as { eventId?: string }).eventId, f])).values()
+    )
+
+    console.log(`[v0] Total unique fixtures collected from ${regions.length} regions:`, uniqueFixtures.length)
+    return uniqueFixtures
   } catch (error) {
     console.log("[v0] Error in fetchAllFixtures:", error)
     return []
