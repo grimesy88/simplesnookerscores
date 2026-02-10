@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { LiveMatches } from "./live-matches"
 import { UpcomingFixtures } from "./upcoming-fixtures"
 import { FeedbackButton } from "./feedback-button"
+import { PlayerSearch } from "./player-search"
 import { RefreshCw, Circle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
@@ -31,6 +32,28 @@ export function SnookerTracker() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [liveCacheInfo, setLiveCacheInfo] = useState<{ cached: boolean; nextRefresh: number } | null>(null)
   const [countdown, setCountdown] = useState<number>(30)
+  const [searchQuery, setSearchQuery] = useState("")
+
+  // Filter matches based on search query
+  const filteredLiveMatches = useMemo(() => {
+    if (!searchQuery.trim()) return liveMatches
+    const query = searchQuery.toLowerCase()
+    return liveMatches.filter(
+      (m) =>
+        m.homeName?.toLowerCase().includes(query) ||
+        m.awayName?.toLowerCase().includes(query)
+    )
+  }, [liveMatches, searchQuery])
+
+  const filteredUpcomingMatches = useMemo(() => {
+    if (!searchQuery.trim()) return upcomingMatches
+    const query = searchQuery.toLowerCase()
+    return upcomingMatches.filter(
+      (m) =>
+        m.homeName?.toLowerCase().includes(query) ||
+        m.awayName?.toLowerCase().includes(query)
+    )
+  }, [upcomingMatches, searchQuery])
 
   const fetchLiveMatches = useCallback(async () => {
     setIsLiveLoading(true)
@@ -130,6 +153,12 @@ export function SnookerTracker() {
               </div>
             </div>
             <div className="flex items-center gap-4">
+              <PlayerSearch
+                liveMatches={liveMatches}
+                upcomingMatches={upcomingMatches}
+                onSearch={setSearchQuery}
+                searchQuery={searchQuery}
+              />
               <FeedbackButton />
               {lastUpdated && (
                 <div className="text-xs text-muted-foreground hidden sm:flex flex-col items-end">
@@ -186,7 +215,7 @@ export function SnookerTracker() {
               </span>
             )}
           </div>
-          <LiveMatches matches={liveMatches} isLoading={isLiveLoading} />
+          <LiveMatches matches={filteredLiveMatches} isLoading={isLiveLoading} />
         </section>
 
         {/* Upcoming Fixtures Section */}
@@ -199,7 +228,7 @@ export function SnookerTracker() {
               </span>
             )}
           </div>
-          <UpcomingFixtures matches={upcomingMatches} isLoading={isFixturesLoading} />
+          <UpcomingFixtures matches={filteredUpcomingMatches} isLoading={isFixturesLoading} />
         </section>
       </div>
     </div>
