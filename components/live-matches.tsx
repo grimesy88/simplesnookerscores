@@ -244,34 +244,61 @@ export function LiveMatches({ matches, isLoading }: LiveMatchesProps) {
     )
   }
 
-  // Group matches by tournament
-  const matchesByTournament = matches.reduce((acc, match) => {
+  // Determine match status category for sorting
+  function getStatusPriority(match: Match): number {
+    const infoNoticeLower = match.infoNotice?.toLowerCase() || ""
+    const isInterval = match.infoNotice === "After first part."
+    const isWithdrawnOrCancelled = infoNoticeLower.includes("withdrawn") || infoNoticeLower.includes("cancelled")
+    const stage = match.eventStage?.toUpperCase() || ""
+
+    if (!isInterval && !isWithdrawnOrCancelled && stage !== "SCHEDULED" && stage !== "FINISHED") return 0 // Live
+    if (isInterval) return 1 // Interval
+    if (stage === "SCHEDULED") return 2 // Scheduled
+    return 3 // Finished / Withdrawn / Cancelled
+  }
+
+  // Sort matches by status priority first, then group by tournament within each priority
+  const sortedMatches = [...matches].sort((a, b) => {
+    const priorityDiff = getStatusPriority(a) - getStatusPriority(b)
+    if (priorityDiff !== 0) return priorityDiff
+    // Within same priority, group by tournament
+    const tournA = a.tournamentName || ""
+    const tournB = b.tournamentName || ""
+    return tournA.localeCompare(tournB)
+  })
+
+  // Group sorted matches by status-tournament combo to show tournament headers correctly
+  type MatchGroup = { tournament: string; statusPriority: number; matches: Match[] }
+  const groups: MatchGroup[] = []
+  for (const match of sortedMatches) {
     const tournament = match.tournamentName || "Snooker"
-    if (!acc[tournament]) {
-      acc[tournament] = []
+    const priority = getStatusPriority(match)
+    const lastGroup = groups[groups.length - 1]
+    if (lastGroup && lastGroup.tournament === tournament && lastGroup.statusPriority === priority) {
+      lastGroup.matches.push(match)
+    } else {
+      groups.push({ tournament, statusPriority: priority, matches: [match] })
     }
-    acc[tournament].push(match)
-    return acc
-  }, {} as Record<string, Match[]>)
+  }
 
   return (
     <Card className="bg-card border-border overflow-hidden">
       <div className="divide-y divide-border">
-        {Object.entries(matchesByTournament).map(([tournament, tournamentMatches]) => (
-          <div key={tournament}>
+        {groups.map((group, groupIndex) => (
+          <div key={`${group.statusPriority}-${group.tournament}-${groupIndex}`}>
             {/* Tournament Header */}
             <div className="flex items-center justify-between px-4 py-2 bg-muted/30">
               <div className="flex items-center gap-2">
                 <Star className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm font-medium text-foreground uppercase tracking-wide">
-                  WORLD: {tournament}
+                  {group.tournament}
                 </span>
               </div>
             </div>
 
             {/* Matches */}
             <div className="divide-y divide-border">
-              {tournamentMatches.map((match, index) => {
+              {group.matches.map((match, index) => {
                 const matchId = match.eventId || `match-${index}`
                 const homeName = match.homeName || "Player 1"
                 const awayName = match.awayName || "Player 2"
