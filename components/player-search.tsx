@@ -94,10 +94,11 @@ export function PlayerSearch({ liveMatches, upcomingMatches, onSearch, searchQue
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="flex items-center justify-center w-9 h-9 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        className="flex items-center gap-2 px-3 h-9 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
         aria-label="Search players"
       >
         <Search className="h-4 w-4" />
+        <span className="text-sm hidden sm:inline">Player Search</span>
       </button>
     )
   }
